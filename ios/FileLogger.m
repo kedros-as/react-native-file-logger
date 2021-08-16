@@ -31,9 +31,11 @@ RCT_EXPORT_METHOD(configure:(NSDictionary*)options resolver:(RCTPromiseResolveBl
     NSNumber* maximumFileSize = options[@"maximumFileSize"];
     NSNumber* maximumNumberOfFiles = options[@"maximumNumberOfFiles"];
     NSString* logsDirectory = options[@"logsDirectory"];
+    NSNumber* logFilesDiskQuota = options[@"logFilesDiskQuota"];
     
     id<DDLogFileManager> fileManager = [[DDLogFileManagerDefault alloc] initWithLogsDirectory:logsDirectory];
     fileManager.maximumNumberOfLogFiles = [maximumNumberOfFiles unsignedIntegerValue];
+    fileManager.logFilesDiskQuota = [logFilesDiskQuota unsignedIntegerValue];
     
     DDFileLogger* fileLogger = [[DDFileLogger alloc] initWithLogFileManager:fileManager];
     fileLogger.logFormatter = [[FileLoggerFormatter alloc] init];
