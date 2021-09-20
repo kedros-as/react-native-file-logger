@@ -21,6 +21,7 @@ import java.io.FilenameFilter;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
@@ -222,7 +223,20 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
                 return (name.endsWith(".log") || name.endsWith(".log.gz"));
             }
         });
-        Arrays.sort(logFiles, Comparator.comparing(File::lastModified).reversed());
+        Arrays.sort(logFiles, new Comparator<File>() {
+            @Override
+            public int compare(File file1, File file2) {
+                long file1LastModified = file1.lastModified();
+                long file2LastModified = file2.lastModified();
+                if (file1LastModified == file2LastModified) {
+                    return 0;
+                } else if (file1LastModified < file2LastModified) {
+                    return -1;
+                } else {
+                    return 1;
+                }
+            }          
+        });
         return logFiles;
     }
 
