@@ -20,6 +20,7 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
@@ -73,7 +74,8 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
         if (dailyRolling) {
             SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
             rollingPolicy.setContext(loggerContext);
-            rollingPolicy.setFileNamePattern(logsDirectory + "/" + logPrefix + "-%d{yyyy-MM-dd}.%i.log");
+            // rollingPolicy.setFileNamePattern(logsDirectory + "/" + logPrefix + "-%d{yyyy-MM-dd}.%i.log");
+            rollingPolicy.setFileNamePattern(logsDirectory + "/" + logPrefix + "-%d{yyyy-MM-dd}.%i.log.gz");
             rollingPolicy.setMaxFileSize(new FileSize(maximumFileSize));
             rollingPolicy.setTotalSizeCap(new FileSize(maximumNumberOfFiles * maximumFileSize));
             rollingPolicy.setMaxHistory(maximumNumberOfFiles);
@@ -138,7 +140,7 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
     public void getLogFilePaths(Promise promise) {
         try {
             WritableArray result = Arguments.createArray();
-            for (File logFile: getLogFiles()) {
+            for (File logFile: getLogFilesSorted()) {
                 result.pushString(logFile.getAbsolutePath());
             }
             promise.resolve(result);
@@ -207,8 +209,21 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
         return directory.listFiles(new FilenameFilter() {
             @Override
             public boolean accept(File dir, String name) {
-                return name.endsWith(".log");
+                return (name.endsWith(".log") || name.endsWith(".log.gz"));
             }
         });
     }
+
+    private File[] getLogFilesSorted() {
+        File directory = new File(logsDirectory);
+        File[] logFiles =  directory.listFiles(new FilenameFilter() {
+            @Override
+            public boolean accept(File dir, String name) {
+                return (name.endsWith(".log") || name.endsWith(".log.gz"));
+            }
+        });
+        Arrays.sort(logFiles, Comparator.comparing(File::lastModified).reversed());
+        return logFiles;
+    }
+
 }

@@ -16,6 +16,6 @@ Pod::Spec.new do |s|
   s.requires_arc = true
 
   s.dependency "React"
-  s.dependency "CocoaLumberjack"
+  s.dependency 'CocoaLumberjack', '~> 3.7.2'
 end
 

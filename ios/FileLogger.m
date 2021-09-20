@@ -4,6 +4,7 @@
 #import <CocoaLumberjack/CocoaLumberjack.h>
 #import <MessageUI/MessageUI.h>
 #import "FileLoggerFormatter.h"
+#import "CompressingLogFileManager.h"
 
 enum LogLevel {
     LOG_LEVEL_DEBUG,
@@ -33,7 +34,8 @@ RCT_EXPORT_METHOD(configure:(NSDictionary*)options resolver:(RCTPromiseResolveBl
     NSString* logsDirectory = options[@"logsDirectory"];
     NSNumber* logFilesDiskQuota = options[@"logFilesDiskQuota"];
     
-    id<DDLogFileManager> fileManager = [[DDLogFileManagerDefault alloc] initWithLogsDirectory:logsDirectory];
+    //id<DDLogFileManager> fileManager = [[DDLogFileManagerDefault alloc] initWithLogsDirectory:logsDirectory];
+    CompressingLogFileManager* fileManager = [[CompressingLogFileManager alloc] initWithLogsDirectory:logsDirectory];
     fileManager.maximumNumberOfLogFiles = [maximumNumberOfFiles unsignedIntegerValue];
     fileManager.logFilesDiskQuota = [logFilesDiskQuota unsignedIntegerValue];
     
