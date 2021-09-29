@@ -43,7 +43,8 @@ RCT_EXPORT_METHOD(configure:(NSDictionary*)options resolver:(RCTPromiseResolveBl
     fileLogger.logFormatter = [[FileLoggerFormatter alloc] init];
     fileLogger.rollingFrequency = [dailyRolling boolValue] ? 24 * 60 * 60 : 0;
     fileLogger.maximumFileSize = [maximumFileSize unsignedIntegerValue];
-    [DDLog removeAllLoggers];
+    // do not cleanup other loggers - BackgroundGeolocation.Logger might be there
+    // [DDLog removeAllLoggers];
     [DDLog addLogger:fileLogger];
     self.fileLogger = fileLogger;
     
