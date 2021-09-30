@@ -112,8 +112,7 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
 
         ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
         root.setLevel(Level.DEBUG);
-        // do not cleanup other loggers - BackgroundGeolocation.Logger might be there
-        // root.detachAndStopAllAppenders();
+        root.detachAndStopAllAppenders();
         root.addAppender(rollingFileAppender);
 
         configureOptions = options;
