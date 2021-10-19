@@ -15,16 +15,38 @@
 // So we use primitive logging macros around NSLog.
 // We maintain the NS prefix on the macros to be explicit about the fact that we're using NSLog.
 
-#define LOG_LEVEL 4
+#define LOG_LEVEL 3
 
 #define NSLogError(frmt, ...)    do{ if(LOG_LEVEL >= 1) NSLog(frmt, ##__VA_ARGS__); } while(0)
 #define NSLogWarn(frmt, ...)     do{ if(LOG_LEVEL >= 2) NSLog(frmt, ##__VA_ARGS__); } while(0)
 #define NSLogInfo(frmt, ...)     do{ if(LOG_LEVEL >= 3) NSLog(frmt, ##__VA_ARGS__); } while(0)
 #define NSLogVerbose(frmt, ...)  do{ if(LOG_LEVEL >= 4) NSLog(frmt, ##__VA_ARGS__); } while(0)
 
+#if TARGET_OS_IPHONE
+BOOL doesAppRunInBackground2(void);
+#endif
+
+
+NSUInteger         const CLFMkDDDefaultLogMaxNumLogFiles   = 5;                // 5 Files
+unsigned long long const CLFMkDDDefaultLogFilesDiskQuota   = 20 * 1024 * 1024; // 20 MB
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark -
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 @interface CompressingLogFileManager (/* Must be nameless for properties */)
+{
+    NSDateFormatter *_fileDateFormatter;
+    NSUInteger _maximumNumberOfLogFiles;
+    unsigned long long _logFilesDiskQuota;
+    NSString *_logsDirectory;
+#if TARGET_OS_IPHONE
+    NSFileProtectionType _defaultFileProtectionLevel;
+#endif
+}
 
 @property (readwrite) BOOL isCompressing;
+@property (readwrite) BOOL isDeleting;
 
 @end
 
@@ -43,31 +65,459 @@
 
 @implementation CompressingLogFileManager
 
+@synthesize maximumNumberOfLogFiles = _maximumNumberOfLogFiles;
+@synthesize logFilesDiskQuota = _logFilesDiskQuota;
 @synthesize isCompressing;
+@synthesize isDeleting;
 
-- (id)init
+- (instancetype)init
 {
     return [self initWithLogsDirectory:nil];
 }
 
-- (id)initWithLogsDirectory:(NSString *)aLogsDirectory
+- (instancetype)initWithLogsDirectory:(NSString *)aLogsDirectory
 {
-    if ((self = [super initWithLogsDirectory:aLogsDirectory]))
-    {
+    if ((self = [super init])) {
         upToDate = NO;
-        
-        // Check for any files that need to be compressed.
-        // But don't start right away.
-        // Wait for the app startup process to finish.
-        
+        _maximumNumberOfLogFiles = CLFMkDDDefaultLogMaxNumLogFiles;
+        _logFilesDiskQuota = CLFMkDDDefaultLogFilesDiskQuota;
+
+        _fileDateFormatter = [[NSDateFormatter alloc] init];
+        [_fileDateFormatter setLocale:[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]];
+        [_fileDateFormatter setTimeZone:[NSTimeZone timeZoneForSecondsFromGMT:0]];
+        [_fileDateFormatter setDateFormat: @"yyyy'-'MM'-'dd'--'HH'-'mm'-'ss'-'SSS'"];
+
+        if (aLogsDirectory.length > 0) {
+            _logsDirectory = [aLogsDirectory copy];
+        } else {
+            _logsDirectory = [[self defaultLogsDirectory] copy];
+        }
+
+        NSLogInfo(@"CompressingLogFileManager: logsDirectory:\n%@", [self logsDirectory]);
+        NSLogVerbose(@"CompressingLogFileManager: sortedLogFileNames:\n%@", [self sortedLogFileNames]);
+
         [self performSelector:@selector(compressNextLogFile) withObject:nil afterDelay:5.0];
     }
+
     return self;
 }
 
 - (void)dealloc
 {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(compressNextLogFile) object:nil];
+}
+
+#if TARGET_OS_IPHONE
+- (instancetype)initWithLogsDirectory:(NSString *)logsDirectory
+           defaultFileProtectionLevel:(NSFileProtectionType)fileProtectionLevel {
+
+    if ((self = [self initWithLogsDirectory:logsDirectory])) {
+        if ([fileProtectionLevel isEqualToString:NSFileProtectionNone] ||
+            [fileProtectionLevel isEqualToString:NSFileProtectionComplete] ||
+            [fileProtectionLevel isEqualToString:NSFileProtectionCompleteUnlessOpen] ||
+            [fileProtectionLevel isEqualToString:NSFileProtectionCompleteUntilFirstUserAuthentication]) {
+            _defaultFileProtectionLevel = fileProtectionLevel;
+        }
+    }
+
+    return self;
+}
+
+#endif
+
+- (void)deleteOldFilesForConfigurationChange {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            // See method header for queue reasoning.
+            [self deleteOldLogFiles];
+        }
+    });
+}
+
+- (void)setLogFilesDiskQuota:(unsigned long long)logFilesDiskQuota {
+    if (_logFilesDiskQuota != logFilesDiskQuota) {
+        _logFilesDiskQuota = logFilesDiskQuota;
+        NSLogInfo(@"CompressingLogFileManager: Responding to configuration change: logFilesDiskQuota");
+        [self deleteOldFilesForConfigurationChange];
+    }
+}
+
+- (void)setMaximumNumberOfLogFiles:(NSUInteger)maximumNumberOfLogFiles {
+    if (_maximumNumberOfLogFiles != maximumNumberOfLogFiles) {
+        _maximumNumberOfLogFiles = maximumNumberOfLogFiles;
+        NSLogInfo(@"CompressingLogFileManager: Responding to configuration change: maximumNumberOfLogFiles");
+        [self deleteOldFilesForConfigurationChange];
+    }
+}
+
+#if TARGET_OS_IPHONE
+- (NSFileProtectionType)logFileProtection {
+    if (_defaultFileProtectionLevel.length > 0) {
+        return _defaultFileProtectionLevel;
+    } else if (doesAppRunInBackground2()) {
+        return NSFileProtectionCompleteUntilFirstUserAuthentication;
+    } else {
+        return NSFileProtectionCompleteUnlessOpen;
+    }
+}
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark File Deleting
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Deletes archived log files that exceed the maximumNumberOfLogFiles or logFilesDiskQuota configuration values.
+ * Method may take a while to execute since we're performing IO. It's not critical that this is synchronized with
+ * log output, since the files we're deleting are all archived and not in use, therefore this method is called on a
+ * background queue.
+ **/
+- (void)deleteOldLogFiles {
+    if (self.isDeleting) return;
+    self.isDeleting = YES;
+
+    NSArray *sortedLogFileInfos = [self sortedLogFileInfos];
+    NSUInteger firstIndexToDelete = NSNotFound;
+
+    const unsigned long long diskQuota = self.logFilesDiskQuota;
+    const NSUInteger maxNumLogFiles = self.maximumNumberOfLogFiles;
+
+    if (diskQuota) {
+        unsigned long long used = 0;
+
+        for (NSUInteger i = 0; i < sortedLogFileInfos.count; i++) {
+            DDLogFileInfo *info = sortedLogFileInfos[i];
+            used += info.fileSize;
+
+            if (used > diskQuota) {
+                firstIndexToDelete = i;
+                break;
+            }
+        }
+    }
+
+    if (maxNumLogFiles) {
+        if (firstIndexToDelete == NSNotFound) {
+            firstIndexToDelete = maxNumLogFiles;
+        } else {
+            firstIndexToDelete = MIN(firstIndexToDelete, maxNumLogFiles);
+        }
+    }
+
+    if (firstIndexToDelete == 0) {
+        // Do we consider the first file?
+        // We are only supposed to be deleting archived files.
+        // In most cases, the first file is likely the log file that is currently being written to.
+        // So in most cases, we do not want to consider this file for deletion.
+
+        if (sortedLogFileInfos.count > 0) {
+            DDLogFileInfo *logFileInfo = sortedLogFileInfos[0];
+
+            if (!logFileInfo.isArchived) {
+                // Don't delete active file.
+                ++firstIndexToDelete;
+            }
+        }
+    }
+
+    if (firstIndexToDelete != NSNotFound) {
+        // removing all log files starting with firstIndexToDelete
+
+        for (NSUInteger i = firstIndexToDelete; i < sortedLogFileInfos.count; i++) {
+            DDLogFileInfo *logFileInfo = sortedLogFileInfos[i];
+
+            NSError *error = nil;
+            BOOL success = [[NSFileManager defaultManager] removeItemAtPath:logFileInfo.filePath error:&error];
+            if (success) {
+                NSLogInfo(@"CompressingLogFileManager: Deleting file: %@", logFileInfo.fileName);
+            } else {
+                NSLogError(@"CompressingLogFileManager: Error deleting file %@", error);
+            }
+        }
+    }
+
+    self.isDeleting = NO;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark Log Files
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Returns the path to the default logs directory.
+ * If the logs directory doesn't exist, this method automatically creates it.
+ **/
+- (NSString *)defaultLogsDirectory {
+
+#if TARGET_OS_IPHONE
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+    NSString *baseDir = paths.firstObject;
+    NSString *logsDirectory = [baseDir stringByAppendingPathComponent:@"Logs"];
+#else
+    NSString *appName = [[NSProcessInfo processInfo] processName];
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
+    NSString *basePath = ([paths count] > 0) ? paths[0] : NSTemporaryDirectory();
+    NSString *logsDirectory = [[basePath stringByAppendingPathComponent:@"Logs"] stringByAppendingPathComponent:appName];
+#endif
+
+    return logsDirectory;
+}
+
+- (NSString *)logsDirectory {
+    // We could do this check once, during initialization, and not bother again.
+    // But this way the code continues to work if the directory gets deleted while the code is running.
+
+    NSAssert(_logsDirectory.length > 0, @"Directory must be set.");
+
+    NSError *err = nil;
+    BOOL success = [[NSFileManager defaultManager] createDirectoryAtPath:_logsDirectory
+                                             withIntermediateDirectories:YES
+                                                              attributes:nil
+                                                                   error:&err];
+    if (success == NO) {
+        NSLogError(@"CompressingLogFileManager: Error creating logsDirectory: %@", err);
+    }
+
+    return _logsDirectory;
+}
+
+- (BOOL)isLogFile:(NSString *)fileName {
+    NSString *appName = [self applicationName];
+
+    // We need to add a space to the name as otherwise we could match applications that have the name prefix.
+    BOOL hasProperPrefix = [fileName hasPrefix:[appName stringByAppendingString:@" "]];
+    BOOL hasProperSuffix = [fileName hasSuffix:@".log"] || [fileName hasSuffix:@".log.gz"];
+
+    return (hasProperPrefix && hasProperSuffix);
+}
+
+// if you change formatter, then change sortedLogFileInfos method also accordingly
+- (NSDateFormatter *)logFileDateFormatter {
+    return _fileDateFormatter;
+}
+
+- (NSArray *)unsortedLogFilePaths {
+    NSString *logsDirectory = [self logsDirectory];
+    NSArray *fileNames = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:logsDirectory error:nil];
+
+    NSMutableArray *unsortedLogFilePaths = [NSMutableArray arrayWithCapacity:[fileNames count]];
+
+    for (NSString *fileName in fileNames) {
+        // Filter out any files that aren't log files. (Just for extra safety)
+
+#if TARGET_IPHONE_SIMULATOR
+        // This is only used on the iPhone simulator for backward compatibility reason.
+        //
+        // In case of iPhone simulator there can be 'archived' extension. isLogFile:
+        // method knows nothing about it. Thus removing it for this method.
+        NSString *theFileName = [fileName stringByReplacingOccurrencesOfString:@".archived"
+                                                                    withString:@""];
+
+        if ([self isLogFile:theFileName])
+#else
+
+        if ([self isLogFile:fileName])
+#endif
+        {
+            NSString *filePath = [logsDirectory stringByAppendingPathComponent:fileName];
+
+            [unsortedLogFilePaths addObject:filePath];
+        }
+    }
+
+    return unsortedLogFilePaths;
+}
+
+- (NSArray *)unsortedLogFileNames {
+    NSArray *unsortedLogFilePaths = [self unsortedLogFilePaths];
+
+    NSMutableArray *unsortedLogFileNames = [NSMutableArray arrayWithCapacity:[unsortedLogFilePaths count]];
+
+    for (NSString *filePath in unsortedLogFilePaths) {
+        [unsortedLogFileNames addObject:[filePath lastPathComponent]];
+    }
+
+    return unsortedLogFileNames;
+}
+
+- (NSArray *)unsortedLogFileInfos {
+    NSArray *unsortedLogFilePaths = [self unsortedLogFilePaths];
+
+    NSMutableArray *unsortedLogFileInfos = [NSMutableArray arrayWithCapacity:[unsortedLogFilePaths count]];
+
+    for (NSString *filePath in unsortedLogFilePaths) {
+        DDLogFileInfo *logFileInfo = [[DDLogFileInfo alloc] initWithFilePath:filePath];
+
+        [unsortedLogFileInfos addObject:logFileInfo];
+    }
+
+    return unsortedLogFileInfos;
+}
+
+- (NSArray *)sortedLogFilePaths {
+    NSArray *sortedLogFileInfos = [self sortedLogFileInfos];
+
+    NSMutableArray *sortedLogFilePaths = [NSMutableArray arrayWithCapacity:[sortedLogFileInfos count]];
+
+    for (DDLogFileInfo *logFileInfo in sortedLogFileInfos) {
+        [sortedLogFilePaths addObject:[logFileInfo filePath]];
+    }
+
+    return sortedLogFilePaths;
+}
+
+- (NSArray *)sortedLogFileNames {
+    NSArray *sortedLogFileInfos = [self sortedLogFileInfos];
+
+    NSMutableArray *sortedLogFileNames = [NSMutableArray arrayWithCapacity:[sortedLogFileInfos count]];
+
+    for (DDLogFileInfo *logFileInfo in sortedLogFileInfos) {
+        [sortedLogFileNames addObject:[logFileInfo fileName]];
+    }
+
+    return sortedLogFileNames;
+}
+
+- (NSArray *)sortedLogFileInfos {
+    return [[self unsortedLogFileInfos] sortedArrayUsingComparator:^NSComparisonResult(DDLogFileInfo *obj1,
+                                                                                       DDLogFileInfo *obj2) {
+        NSDate *date1 = [NSDate new];
+        NSDate *date2 = [NSDate new];
+
+        NSArray<NSString *> *arrayComponent = [[obj1 fileName] componentsSeparatedByString:@" "];
+        if (arrayComponent.count > 0) {
+            NSString *stringDate = arrayComponent.lastObject;
+            stringDate = [stringDate stringByReplacingOccurrencesOfString:@".log.gz" withString:@""];
+            stringDate = [stringDate stringByReplacingOccurrencesOfString:@".log" withString:@""];
+
+#if TARGET_IPHONE_SIMULATOR
+            // This is only used on the iPhone simulator for backward compatibility reason.
+            stringDate = [stringDate stringByReplacingOccurrencesOfString:@".archived" withString:@""];
+#endif
+            date1 = [[self logFileDateFormatter] dateFromString:stringDate] ?: [obj1 creationDate];
+        }
+
+        arrayComponent = [[obj2 fileName] componentsSeparatedByString:@" "];
+        if (arrayComponent.count > 0) {
+            NSString *stringDate = arrayComponent.lastObject;
+            stringDate = [stringDate stringByReplacingOccurrencesOfString:@".log.gz" withString:@""];
+            stringDate = [stringDate stringByReplacingOccurrencesOfString:@".log" withString:@""];
+#if TARGET_IPHONE_SIMULATOR
+            // This is only used on the iPhone simulator for backward compatibility reason.
+            stringDate = [stringDate stringByReplacingOccurrencesOfString:@".archived" withString:@""];
+#endif
+            date2 = [[self logFileDateFormatter] dateFromString:stringDate] ?: [obj2 creationDate];
+        }
+
+        return [date2 compare:date1 ?: [NSDate new]];
+    }];
+
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark Creation
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//if you change newLogFileName , then  change isLogFile method also accordingly
+- (NSString *)newLogFileName {
+    NSString *appName = [self applicationName];
+
+    NSDateFormatter *dateFormatter = [self logFileDateFormatter];
+    NSString *formattedDate = [dateFormatter stringFromDate:[NSDate date]];
+
+    return [NSString stringWithFormat:@"%@ %@.log", appName, formattedDate];
+}
+
+- (nullable NSString *)logFileHeader {
+    return nil;
+}
+
+- (NSData *)logFileHeaderData {
+    NSString *fileHeaderStr = [self logFileHeader];
+
+    if (fileHeaderStr.length == 0) {
+        return nil;
+    }
+
+    if (![fileHeaderStr hasSuffix:@"\n"]) {
+        fileHeaderStr = [fileHeaderStr stringByAppendingString:@"\n"];
+    }
+
+    return [fileHeaderStr dataUsingEncoding:NSUTF8StringEncoding];
+}
+
+- (NSString *)createNewLogFileWithError:(NSError *__autoreleasing  _Nullable *)error {
+    static NSUInteger MAX_ALLOWED_ERROR = 5;
+
+    NSString *fileName = [self newLogFileName];
+    NSString *logsDirectory = [self logsDirectory];
+    NSData *fileHeader = [self logFileHeaderData];
+    if (fileHeader == nil) {
+        fileHeader = [NSData new];
+    }
+
+    NSUInteger attempt = 1;
+    NSUInteger criticalErrors = 0;
+    NSError *lastCriticalError;
+
+    do {
+        if (criticalErrors >= MAX_ALLOWED_ERROR) {
+            NSLogError(@"CompressingLogFileManager: Bailing file creation, encountered %ld errors.",
+                        (unsigned long)criticalErrors);
+            *error = lastCriticalError;
+            return nil;
+        }
+
+        NSString *actualFileName = fileName;
+        if (attempt > 1) {
+            NSString *extension = [actualFileName pathExtension];
+
+            actualFileName = [actualFileName stringByDeletingPathExtension];
+            actualFileName = [actualFileName stringByAppendingFormat:@" %lu", (unsigned long)attempt];
+
+            if (extension.length) {
+                actualFileName = [actualFileName stringByAppendingPathExtension:extension];
+            }
+        }
+
+        NSString *filePath = [logsDirectory stringByAppendingPathComponent:actualFileName];
+
+        NSError *currentError = nil;
+        BOOL success = [fileHeader writeToFile:filePath options:NSDataWritingAtomic error:&currentError];
+
+#if TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
+        if (success) {
+            // When creating log file on iOS we're setting NSFileProtectionKey attribute to NSFileProtectionCompleteUnlessOpen.
+            //
+            // But in case if app is able to launch from background we need to have an ability to open log file any time we
+            // want (even if device is locked). Thats why that attribute have to be changed to
+            // NSFileProtectionCompleteUntilFirstUserAuthentication.
+            NSDictionary *attributes = @{NSFileProtectionKey: [self logFileProtection]};
+            success = [[NSFileManager defaultManager] setAttributes:attributes
+                                                       ofItemAtPath:filePath
+                                                              error:&currentError];
+        }
+#endif
+
+        if (success) {
+            NSLogVerbose(@"CompressingLogFileManager: Created new log file: %@", actualFileName);
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                // Since we just created a new log file, we may need to delete some old log files
+                [self deleteOldLogFiles];
+            });
+            return filePath;
+        } else if (currentError.code == NSFileWriteFileExistsError) {
+            attempt++;
+            continue;
+        } else {
+            NSLogError(@"CompressingLogFileManager: Critical error while creating log file: %@", currentError);
+            criticalErrors++;
+            lastCriticalError = currentError;
+            continue;
+        }
+
+        return filePath;
+    } while (YES);
 }
 
 - (void)compressLogFile:(DDLogFileInfo *)logFile
@@ -442,8 +892,33 @@
     
     } // end @autoreleasepool
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark Utility
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+- (NSString *)applicationName {
+    static NSString *_appName;
+    static dispatch_once_t onceToken;
+
+    dispatch_once(&onceToken, ^{
+        _appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+
+        if (_appName.length == 0) {
+            _appName = [[NSProcessInfo processInfo] processName];
+        }
+
+        if (_appName.length == 0) {
+            _appName = @"";
+        }
+    });
+
+    return _appName;
+}
                  
 @end
+
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark -
@@ -498,3 +973,28 @@
 }
 
 @end
+
+#if TARGET_OS_IPHONE
+/**
+ * When creating log file on iOS we're setting NSFileProtectionKey attribute to NSFileProtectionCompleteUnlessOpen.
+ *
+ * But in case if app is able to launch from background we need to have an ability to open log file any time we
+ * want (even if device is locked). Thats why that attribute have to be changed to
+ * NSFileProtectionCompleteUntilFirstUserAuthentication.
+ */
+BOOL doesAppRunInBackground2() {
+    BOOL answer = NO;
+
+    NSArray *backgroundModes = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"UIBackgroundModes"];
+
+    for (NSString *mode in backgroundModes) {
+        if (mode.length > 0) {
+            answer = YES;
+            break;
+        }
+    }
+
+    return answer;
+}
+
+#endif
