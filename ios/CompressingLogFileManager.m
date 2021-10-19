@@ -15,7 +15,7 @@
 // So we use primitive logging macros around NSLog.
 // We maintain the NS prefix on the macros to be explicit about the fact that we're using NSLog.
 
-#define LOG_LEVEL 4
+#define LOG_LEVEL 3
 
 #define NSLogError(frmt, ...)    do{ if(LOG_LEVEL >= 1) NSLog(frmt, ##__VA_ARGS__); } while(0)
 #define NSLogWarn(frmt, ...)     do{ if(LOG_LEVEL >= 2) NSLog(frmt, ##__VA_ARGS__); } while(0)
@@ -93,7 +93,7 @@ unsigned long long const CLFMkDDDefaultLogFilesDiskQuota   = 20 * 1024 * 1024; /
             _logsDirectory = [[self defaultLogsDirectory] copy];
         }
 
-        NSLogVerbose(@"CompressingLogFileManager: logsDirectory:\n%@", [self logsDirectory]);
+        NSLogInfo(@"CompressingLogFileManager: logsDirectory:\n%@", [self logsDirectory]);
         NSLogVerbose(@"CompressingLogFileManager: sortedLogFileNames:\n%@", [self sortedLogFileNames]);
 
         [self performSelector:@selector(compressNextLogFile) withObject:nil afterDelay:5.0];
