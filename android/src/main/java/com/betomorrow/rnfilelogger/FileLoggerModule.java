@@ -117,7 +117,8 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
         asyncAppender.setContext(loggerContext);
         asyncAppender.setIncludeCallerData(false);
         asyncAppender.setQueueSize(AsyncAppenderBase.DEFAULT_QUEUE_SIZE);
-        asyncAppender.setDiscardingThreshold(-1);
+        asyncAppender.setDiscardingThreshold(0);
+        asyncAppender.setMaxFlushTime(0);
         asyncAppender.addAppender(rollingFileAppender);
         asyncAppender.start();
 
