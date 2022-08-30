@@ -18,15 +18,17 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FilenameFilter;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 
+import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.encoder.PatternLayoutEncoder;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AsyncAppenderBase;
 import ch.qos.logback.core.rolling.FixedWindowRollingPolicy;
 import ch.qos.logback.core.rolling.RollingFileAppender;
 import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
@@ -39,7 +41,7 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
     private static final int LOG_LEVEL_WARNING = 2;
     private static final int LOG_LEVEL_ERROR = 3;
 
-    private static Logger logger = LoggerFactory.getLogger(FileLoggerModule.class);
+    private static final Logger logger = LoggerFactory.getLogger(FileLoggerModule.class);
 
     private final ReactApplicationContext reactContext;
     private String logsDirectory;
@@ -68,24 +70,24 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
 
         LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
 
-        RollingFileAppender<ILoggingEvent> rollingFileAppender = new RollingFileAppender<>();
+        final RollingFileAppender<ILoggingEvent> rollingFileAppender = new RollingFileAppender<>();
         rollingFileAppender.setContext(loggerContext);
         rollingFileAppender.setFile(logsDirectory + "/" + logPrefix + "-latest.log");
 
         if (dailyRolling) {
-            SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
+            final SizeAndTimeBasedRollingPolicy<ILoggingEvent> rollingPolicy = new SizeAndTimeBasedRollingPolicy<>();
             rollingPolicy.setContext(loggerContext);
             // rollingPolicy.setFileNamePattern(logsDirectory + "/" + logPrefix + "-%d{yyyy-MM-dd}.%i.log");
             rollingPolicy.setFileNamePattern(logsDirectory + "/" + logPrefix + "-%d{yyyy-MM-dd}.%i.log.gz");
             rollingPolicy.setMaxFileSize(new FileSize(maximumFileSize));
-            rollingPolicy.setTotalSizeCap(new FileSize(maximumNumberOfFiles * maximumFileSize));
+            rollingPolicy.setTotalSizeCap(new FileSize((long) maximumNumberOfFiles * maximumFileSize));
             rollingPolicy.setMaxHistory(maximumNumberOfFiles);
             rollingPolicy.setParent(rollingFileAppender);
             rollingPolicy.start();
             rollingFileAppender.setRollingPolicy(rollingPolicy);
 
         } else if (maximumFileSize > 0) {
-            FixedWindowRollingPolicy rollingPolicy = new FixedWindowRollingPolicy();
+            final FixedWindowRollingPolicy rollingPolicy = new FixedWindowRollingPolicy();
             rollingPolicy.setContext(loggerContext);
             rollingPolicy.setFileNamePattern(logsDirectory + "/" + logPrefix + "-%i.log");
             rollingPolicy.setMinIndex(1);
@@ -94,7 +96,7 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
             rollingPolicy.start();
             rollingFileAppender.setRollingPolicy(rollingPolicy);
 
-            SizeBasedTriggeringPolicy triggeringPolicy = new SizeBasedTriggeringPolicy();
+            final SizeBasedTriggeringPolicy<ILoggingEvent> triggeringPolicy = new SizeBasedTriggeringPolicy<>();
             triggeringPolicy.setContext(loggerContext);
             triggeringPolicy.setMaxFileSize(new FileSize(maximumFileSize));
             triggeringPolicy.start();
@@ -103,17 +105,27 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
 
         PatternLayoutEncoder encoder = new PatternLayoutEncoder();
         encoder.setContext(loggerContext);
-        encoder.setCharset(Charset.forName("UTF-8"));
+        encoder.setCharset(StandardCharsets.UTF_8);
         encoder.setPattern("%msg%n");
         encoder.start();
 
         rollingFileAppender.setEncoder(encoder);
         rollingFileAppender.start();
 
+        // Async appender - wraps rollingFileAppender
+        final AsyncAppender asyncAppender = new AsyncAppender();
+        asyncAppender.setContext(loggerContext);
+        asyncAppender.setIncludeCallerData(false);
+        asyncAppender.setQueueSize(AsyncAppenderBase.DEFAULT_QUEUE_SIZE);
+        asyncAppender.setDiscardingThreshold(0);
+        asyncAppender.setMaxFlushTime(0);
+        asyncAppender.addAppender(rollingFileAppender);
+        asyncAppender.start();
+
         ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
         root.setLevel(Level.DEBUG);
         root.detachAndStopAllAppenders();
-        root.addAppender(rollingFileAppender);
+        root.addAppender(asyncAppender);
 
         configureOptions = options;
         promise.resolve(null);
