@@ -1,14 +1,16 @@
 {
 	"name": "react-native-file-logger",
 	"title": "React Native File Logger",
-	"version": "0.2.1",
+	"version": "0.5.1",
 	"description": "A simple file-logger for React Native",
 	"main": "dist/index.js",
+	"source": "src/index.ts",
 	"files": [
 		"README.md",
 		"android",
 		"ios",
 		"dist",
+		"src",
 		"RNFileLogger.podspec"
 	],
 	"scripts": {
@@ -17,8 +19,8 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/simontreny/react-native-file-logger.git",
-		"baseUrl": "https://github.com/simontreny/react-native-file-logger"
+		"url": "git+https://github.com/BeTomorrow/react-native-file-logger.git",
+		"baseUrl": "https://github.com/BeTomorrow/react-native-file-logger"
 	},
 	"keywords": [
 		"react-native"
@@ -31,15 +33,23 @@
 	"licenseFilename": "LICENSE",
 	"readmeFilename": "README.md",
 	"peerDependencies": {
-		"react": "^16.8.1",
-		"react-native": ">=0.60.0-rc.0 <1.0.x"
+		"react": ">=16.0.0",
+		"react-native": ">=0.60.0"
 	},
 	"devDependencies": {
-		"@types/react-native": "^0.62.18",
-		"prettier": "^2.0.5",
-		"react": "^16.9.0",
-		"react-native": "^0.61.5",
+		"@babel/preset-env": "^7.19.0",
+		"prettier": "^2.7.1",
+		"react": "^18.2.0",
+		"react-native": "0.71.1",
 		"rimraf": "^3.0.2",
-		"typescript": "^3.9.6"
+		"typescript": "^4.8.2"
+	},
+	"codegenConfig": {
+		"name": "FileLoggerSpec",
+		"type": "modules",
+		"jsSrcsDir": "src",
+		"android": {
+			"javaPackageName": "com.betomorrow.rnfilelogger"
+		}
 	}
 }

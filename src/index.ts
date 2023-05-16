@@ -1,8 +1,12 @@
 import { NativeModules } from "react-native";
-
+import type RNFileLoggerType from "./NativeFileLogger";
 declare var global: any;
 
-const { FileLogger: RNFileLogger } = NativeModules;
+const isTurboModuleEnabled = global.__turboModuleProxy != null;
+console.log(`TurboModule enabled: ${isTurboModuleEnabled}`);
+const RNFileLogger: typeof RNFileLoggerType = isTurboModuleEnabled
+	? require("./NativeFileLogger").default
+	: NativeModules.FileLogger;
 
 export enum LogLevel {
 	Debug,
@@ -25,7 +29,7 @@ export interface ConfigureOptions {
 }
 
 export interface SendByEmailOptions {
-	to?: string;
+	to?: string | string[];
 	subject?: string;
 	body?: string;
 }
@@ -89,7 +93,12 @@ class FileLoggerStatic {
 	}
 
 	sendLogFilesByEmail(options: SendByEmailOptions = {}): Promise<void> {
-		return RNFileLogger.sendLogFilesByEmail(options);
+		if (options.to) {
+			const toEmails = Array.isArray(options.to) ? options.to : [options.to];
+			return RNFileLogger.sendLogFilesByEmail({ ...options, to: toEmails });
+		} else {
+			return RNFileLogger.sendLogFilesByEmail({ ...options, to: undefined });
+		}
 	}
 
 	debug(msg: string) {
