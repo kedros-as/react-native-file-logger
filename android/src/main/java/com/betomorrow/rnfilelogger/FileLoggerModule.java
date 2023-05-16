@@ -8,9 +8,9 @@ import androidx.core.content.FileProvider;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
-import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.WritableArray;
 
 import org.slf4j.Logger;
@@ -35,7 +35,8 @@ import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
 import ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy;
 import ch.qos.logback.core.util.FileSize;
 
-public class FileLoggerModule extends ReactContextBaseJavaModule {
+public class FileLoggerModule extends FileLoggerSpec {
+    public static final String NAME = "FileLogger";
     private static final int LOG_LEVEL_DEBUG = 0;
     private static final int LOG_LEVEL_INFO = 1;
     private static final int LOG_LEVEL_WARNING = 2;
@@ -52,9 +53,8 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
         this.reactContext = reactContext;
     }
 
-    @Override
     public String getName() {
-        return "FileLogger";
+        return NAME;
     }
 
     @ReactMethod
@@ -132,8 +132,8 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
     }
 
     @ReactMethod
-    public void write(int level, String str) {
-        switch (level) {
+    public void write(double level, String str) {
+        switch ((int) level) {
             case LOG_LEVEL_DEBUG:
                 logger.debug(str);
                 break;
@@ -181,7 +181,7 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void sendLogFilesByEmail(ReadableMap options, Promise promise) {
         try {
-            String to = options.hasKey("to") ? options.getString("to") : null;
+            ReadableArray to = options.hasKey("to") ? options.getArray("to") : null;
             String subject = options.hasKey("subject") ? options.getString("subject") : null;
             String body = options.hasKey("body") ? options.getString("body") : null;
 
@@ -189,7 +189,7 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
             intent.setType("plain/text");
             
             if (to != null) {
-                intent.putExtra(Intent.EXTRA_EMAIL, new String[]{to});
+                intent.putExtra(Intent.EXTRA_EMAIL, readableArrayToStringArray(to));
             }
             if (subject != null) {
                 intent.putExtra(Intent.EXTRA_SUBJECT, subject);
@@ -250,6 +250,15 @@ public class FileLoggerModule extends ReactContextBaseJavaModule {
             }          
         });
         return logFiles;
+    }
+
+    private String[] readableArrayToStringArray(ReadableArray r) {
+        int length = r.size();
+        String[] strArray = new String[length];
+        for (int i = 0; i < length; i++) {
+            strArray[i] = r.getString(i);
+        }
+        return strArray;
     }
 
 }
